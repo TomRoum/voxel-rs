@@ -189,7 +189,7 @@ impl Gameplay {
             let x = block_result.pos.x.floor() as i32;
             let y = block_result.pos.y.floor() as i32;
             let z = block_result.pos.z.floor() as i32;
-            world.world.set_block(x, y, z, blocks::AIR);
+            world.set_block(x, y, z, blocks::AIR);
         }
 
         // block picking
@@ -220,7 +220,7 @@ impl Gameplay {
                 (player_max_y < y || player_min_y > y + 1.0) ||
                 (player_max_z < z || player_min_z > z + 1.0) ||
                 player.caps.flying {
-                let did_set = world.world.set_block(x as i32, y as i32, z as i32, self.selected_block);
+                let did_set = world.set_block(x as i32, y as i32, z as i32, self.selected_block);
                 if !did_set {
                     // if the block could not be placed because of no chunk being present, manually add the chunk
                     let pos = BlockPos::new(x as i32, y as i32, z as i32);

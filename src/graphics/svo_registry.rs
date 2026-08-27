@@ -24,10 +24,14 @@ pub struct Material {
     tex_top_normal: Option<String>,
     tex_side_normal: Option<String>,
     tex_bottom_normal: Option<String>,
+    emission_color: [f32; 3],
+    emission_strength: f32,
+    light_blocking: i32,
+    render_flags: i32,
 }
 
 #[repr(C)]
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(super) struct MaterialInstance {
     pub specular_pow: f32,
     pub specular_strength: f32,
@@ -37,13 +41,48 @@ pub(super) struct MaterialInstance {
     pub tex_top_normal: i32,
     pub tex_side_normal: i32,
     pub tex_bottom_normal: i32,
+    pub emission_color: [f32; 3],
+    pub emission_strength: f32,
+    pub light_blocking: i32,
+    pub render_flags: i32,
+    pub padding: [u32; 2],
 }
+
+impl Default for MaterialInstance {
+    fn default() -> Self {
+        Self {
+            specular_pow: 0.0,
+            specular_strength: 0.0,
+            tex_top: -1,
+            tex_side: -1,
+            tex_bottom: -1,
+            tex_top_normal: -1,
+            tex_side_normal: -1,
+            tex_bottom_normal: -1,
+            emission_color: [0.0; 3],
+            emission_strength: 0.0,
+            light_blocking: 1,
+            render_flags: MATERIAL_RENDER_OPAQUE,
+            padding: [0; 2],
+        }
+    }
+}
+
+pub const MATERIAL_RENDER_OPAQUE: i32 = 1;
+pub const MATERIAL_RENDER_CUTOUT: i32 = 1 << 1;
+pub const MATERIAL_RENDER_TRANSLUCENT: i32 = 1 << 2;
+pub const MATERIAL_RENDER_ANIMATED: i32 = 1 << 3;
+pub const MATERIAL_RENDER_EMISSIVE: i32 = 1 << 4;
 
 impl Material {
     pub fn new() -> Self {
         Self {
             specular_pow: 0.0,
             specular_strength: 0.0,
+            emission_color: [0.0; 3],
+            emission_strength: 0.0,
+            light_blocking: 1,
+            render_flags: MATERIAL_RENDER_OPAQUE,
             tex_top: None,
             tex_side: None,
             tex_bottom: None,
@@ -57,6 +96,23 @@ impl Material {
     pub fn specular(mut self, pow: f32, strength: f32) -> Self {
         self.specular_pow = pow;
         self.specular_strength = strength;
+        self
+    }
+
+    pub fn emission(mut self, color: [f32; 3], strength: f32) -> Self {
+        self.emission_color = color;
+        self.emission_strength = strength;
+        self.render_flags |= MATERIAL_RENDER_EMISSIVE;
+        self
+    }
+
+    pub fn light_blocking(mut self, value: i32) -> Self {
+        self.light_blocking = value.clamp(0, 1);
+        self
+    }
+
+    pub fn render_flags(mut self, flags: i32) -> Self {
+        self.render_flags = flags;
         self
     }
 
@@ -94,6 +150,7 @@ impl Material {
         }
         self
     }
+
 }
 
 pub struct VoxelRegistry {
@@ -158,6 +215,11 @@ impl VoxelRegistry {
                 tex_top_normal: lookup(tex_array, mat.tex_top_normal.as_ref()),
                 tex_side_normal: lookup(tex_array, mat.tex_side_normal.as_ref()),
                 tex_bottom_normal: lookup(tex_array, mat.tex_bottom_normal.as_ref()),
+                emission_color: mat.emission_color,
+                emission_strength: mat.emission_strength,
+                light_blocking: mat.light_blocking,
+                render_flags: mat.render_flags,
+                padding: [0; 2],
             };
         }
 

@@ -9,6 +9,40 @@ pub type BlockId = u32;
 pub type ChunkStorage = Octree<BlockId, StatsAllocator>;
 
 pub const NO_BLOCK: BlockId = 0;
+pub const CHUNK_SIZE: u32 = 32;
+pub const CHUNK_VOLUME: usize = (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize;
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct VoxelLight(pub u32);
+
+impl VoxelLight {
+    pub const MAX: u8 = 15;
+
+    pub const fn new(sky: u8, block: u8, red: u8, green: u8, blue: u8) -> Self {
+        Self((sky as u32 & 0xf)
+            | ((block as u32 & 0xf) << 4)
+            | ((red as u32 & 0xf) << 8)
+            | ((green as u32 & 0xf) << 12)
+            | ((blue as u32 & 0xf) << 16))
+    }
+
+    pub const fn sky(self) -> u8 { (self.0 & 0xf) as u8 }
+    pub const fn block(self) -> u8 { ((self.0 >> 4) & 0xf) as u8 }
+    pub const fn red(self) -> u8 { ((self.0 >> 8) & 0xf) as u8 }
+    pub const fn green(self) -> u8 { ((self.0 >> 12) & 0xf) as u8 }
+    pub const fn blue(self) -> u8 { ((self.0 >> 16) & 0xf) as u8 }
+
+    pub const fn max(self, other: Self) -> Self {
+        Self::new(
+            if self.sky() > other.sky() { self.sky() } else { other.sky() },
+            if self.block() > other.block() { self.block() } else { other.block() },
+            if self.red() > other.red() { self.red() } else { other.red() },
+            if self.green() > other.green() { self.green() } else { other.green() },
+            if self.blue() > other.blue() { self.blue() } else { other.blue() },
+        )
+    }
+}
 
 // -------------------------------------------------------------------------------------------------
 
@@ -87,6 +121,27 @@ mod chunk_storage_allocator_tests {
     }
 }
 
+#[cfg(test)]
+mod voxel_light_tests {
+    use super::{Chunk, ChunkPos, ChunkStorageAllocator, VoxelLight, CHUNK_VOLUME};
+
+    #[test]
+    fn packs_channels_and_tracks_dirty_bounds() {
+        let light = VoxelLight::new(15, 14, 13, 12, 11);
+        assert_eq!((light.sky(), light.block(), light.red(), light.green(), light.blue()), (15, 14, 13, 12, 11));
+        assert_eq!(VoxelLight::new(31, 30, 29, 28, 27).0 & 0xf, 15);
+
+        let allocator = ChunkStorageAllocator::new();
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0), 5, allocator.allocate());
+        assert_eq!(chunk.light_data.len(), CHUNK_VOLUME);
+        chunk.set_light(1, 2, 3, light);
+        chunk.set_light(4, 5, 6, light);
+        assert_eq!(chunk.light_revision, 2);
+        assert_eq!(chunk.take_light_dirty_bounds(), Some([1, 2, 3, 4, 5, 6]));
+        assert_eq!(chunk.take_light_dirty_bounds(), None);
+    }
+}
+
 // -------------------------------------------------------------------------------------------------
 
 /// Chunk is a group of 32^3 voxels. It is the smallest voxel container. Many chunks make up the
@@ -97,11 +152,21 @@ pub struct Chunk {
     /// octree. 5 = maximum depth/full level of detail (2^5=32 - chunk block size along each axis).
     pub lod: u8,
     pub storage: Option<Pooled<ChunkStorage>>,
+    pub light_data: Vec<VoxelLight>,
+    pub light_revision: u64,
+    pub light_dirty_bounds: Option<[u32; 6]>,
 }
 
 impl Chunk {
     pub fn new(pos: ChunkPos, lod: u8, storage: Pooled<ChunkStorage>) -> Self {
-        Self { pos, lod, storage: Some(storage) }
+        Self {
+            pos,
+            lod,
+            storage: Some(storage),
+            light_data: vec![VoxelLight::default(); CHUNK_VOLUME],
+            light_revision: 0,
+            light_dirty_bounds: None,
+        }
     }
 
     pub fn get_block(&self, x: u32, y: u32, z: u32) -> BlockId {
@@ -119,6 +184,29 @@ impl Chunk {
         } else {
             self.storage.as_mut().unwrap().set_leaf(Position(x, y, z), block);
         }
+    }
+
+    pub const fn light_index(x: u32, y: u32, z: u32) -> usize {
+        (x + CHUNK_SIZE * (z + CHUNK_SIZE * y)) as usize
+    }
+
+    pub fn get_light(&self, x: u32, y: u32, z: u32) -> VoxelLight {
+        self.light_data[Self::light_index(x, y, z)]
+    }
+
+    pub fn set_light(&mut self, x: u32, y: u32, z: u32, light: VoxelLight) {
+        let index = Self::light_index(x, y, z);
+        if self.light_data[index] == light { return; }
+        self.light_data[index] = light;
+        self.light_revision = self.light_revision.wrapping_add(1);
+        self.light_dirty_bounds = Some(match self.light_dirty_bounds {
+            Some([min_x, min_y, min_z, max_x, max_y, max_z]) => [min_x.min(x), min_y.min(y), min_z.min(z), max_x.max(x), max_y.max(y), max_z.max(z)],
+            None => [x, y, z, x, y, z],
+        });
+    }
+
+    pub fn take_light_dirty_bounds(&mut self) -> Option<[u32; 6]> {
+        self.light_dirty_bounds.take()
     }
 
     /// Iterates through the whole chunk calling `f` for each block and sets it to the returned value. Any previous

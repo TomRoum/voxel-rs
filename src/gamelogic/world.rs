@@ -37,6 +37,7 @@ pub struct World {
     world_generator: systems::worldgen::Generator,
     world_generator_cfg: worldgen::Config,
     pub world_svo: worldsvo::Svo,
+    lighting: systems::lighting::Lighting,
     world_fbo: Framebuffer,
 
     gpu_size_mb: usize,
@@ -97,6 +98,7 @@ impl World {
             world_generator: systems::worldgen::Generator::new(Rc::clone(&job_system), chunk_allocator, chunk_generator),
             world_generator_cfg: world_cfg,
             world_svo: worldsvo::Svo::new(job_system, graphics_svo, loading_radius),
+            lighting: systems::lighting::Lighting::default(),
             world_fbo: Framebuffer::new(1920, 1080, false, false),
             gpu_size_mb,
             physics: Physics::new(),
@@ -118,6 +120,15 @@ impl World {
         self.camera.forward = entity.get_forward();
 
         self.handle_chunk_loading();
+        self.lighting.process(&mut self.world);
+    }
+
+    pub fn set_block(&mut self, x: i32, y: i32, z: i32, block: u32) -> bool {
+        let did_set = self.world.set_block(x, y, z, block);
+        if did_set && block == blocks::GLOWSTONE {
+            self.lighting.seed_block_light(&mut self.world, x, y, z, crate::world::chunk::VoxelLight::new(0, 15, 15, 15, 15));
+        }
+        did_set
     }
 
     pub fn handle_window_resize(&mut self, width: i32, height: i32, aspect_ratio: f32) {
