@@ -12,6 +12,7 @@ use crate::graphics::svo_picker::{PickerBatch, PickerBatchResult};
 use crate::systems::jobs::{ChunkProcessor, ChunkResult, JobSystem};
 use crate::systems::physics::Raycaster;
 use crate::world::chunk::{BlockPos, ChunkPos};
+use crate::world::chunk::VoxelLight;
 use crate::world::hds;
 use crate::world::hds::{ChunkBufferPool, WorldSvo};
 #[cfg(feature = "use-csvo")]
@@ -57,6 +58,8 @@ pub struct Svo {
     leaf_ids: FxHashMap<ChunkPos, LeafId>,
     has_changed: bool,
     svo_coord_space: SvoCoordSpace,
+    light_slots: FxHashMap<ChunkPos, usize>,
+    free_light_slots: Vec<usize>,
 }
 
 pub struct AllocStats {
@@ -82,6 +85,8 @@ impl Svo {
                 center: ChunkPos::new(0, 0, 0),
                 dst: render_distance,
             },
+            light_slots: FxHashMap::default(),
+            free_light_slots: Vec::new(),
         }
     }
 
@@ -100,6 +105,10 @@ impl Svo {
 
     pub fn remove_chunk(&mut self, pos: &ChunkPos) {
         self.processor.dequeue(pos);
+
+        if let Some(slot) = self.light_slots.remove(pos) {
+            self.free_light_slots.push(slot);
+        }
 
         if let Some(id) = self.leaf_ids.remove(pos) {
             self.world_svo.remove_leaf(id);
@@ -144,6 +153,7 @@ impl Svo {
         }
 
         self.has_changed = false;
+        self.update_light_slot_table();
         self.world_svo.serialize();
         self.graphics_svo.update(self.world_svo.as_mut());
 
@@ -153,6 +163,18 @@ impl Svo {
     fn on_coord_space_change(&mut self) {
         self.has_changed = true;
         Self::shift_chunks(&self.svo_coord_space, &mut self.leaf_ids, self.world_svo.as_mut());
+    }
+
+    fn update_light_slot_table(&mut self) {
+        let side = self.svo_coord_space.dst as usize * 2 + 1;
+        let mut slots = vec![u32::MAX; side * side * side];
+        for (pos, slot) in &self.light_slots {
+            if let Some(svo_pos) = self.svo_coord_space.cnv_chunk_pos(*pos) {
+                let index = svo_pos.0 as usize + side * (svo_pos.2 as usize + side * svo_pos.1 as usize);
+                slots[index] = *slot as u32;
+            }
+        }
+        self.graphics_svo.update_light_slots(&slots);
     }
 
     /// Iterates through all chunks and "shifts" them, if necessary, to their new position in SVO
@@ -197,9 +219,18 @@ impl Svo {
 
     fn process_serialized_chunks(&mut self, results: Vec<ChunkResult<target_impl::SerializedChunk>>) -> Vec<BorrowedChunk> {
         let mut chunks = Vec::new();
+        let mut light_updates = Vec::new();
 
         for mut result in results {
             let chunk = result.value.take_borrowed_chunk().unwrap();
+            let slot = if let Some(slot) = self.light_slots.get(&result.pos) {
+                *slot
+            } else {
+                let slot = self.free_light_slots.pop().unwrap_or(self.light_slots.len());
+                self.light_slots.insert(result.pos, slot);
+                slot
+            };
+            light_updates.push((slot, chunk.light_data.clone()));
             chunks.push(chunk);
 
             let svo_pos = self.svo_coord_space.cnv_chunk_pos(result.pos);
@@ -213,6 +244,9 @@ impl Svo {
             self.leaf_ids.insert(result.pos, id);
             self.has_changed = true;
         }
+
+        let updates = light_updates.iter().map(|(slot, lights)| (*slot, lights.as_slice())).collect::<Vec<(usize, &[VoxelLight])>>();
+        self.graphics_svo.update_light_chunks(&updates);
 
         chunks
     }

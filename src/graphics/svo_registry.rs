@@ -24,6 +24,9 @@ pub struct Material {
     tex_top_normal: Option<String>,
     tex_side_normal: Option<String>,
     tex_bottom_normal: Option<String>,
+    emission_color: [f32; 3],
+    emission_strength: f32,
+    light_blocking: i32,
 }
 
 #[repr(C)]
@@ -37,6 +40,11 @@ pub(super) struct MaterialInstance {
     pub tex_top_normal: i32,
     pub tex_side_normal: i32,
     pub tex_bottom_normal: i32,
+    pub emission_color: [f32; 3],
+    pub emission_strength: f32,
+    pub light_blocking: i32,
+    pub render_flags: i32,
+    pub padding: [u32; 2],
 }
 
 impl Material {
@@ -50,6 +58,9 @@ impl Material {
             tex_top_normal: None,
             tex_side_normal: None,
             tex_bottom_normal: None,
+            emission_color: [0.0; 3],
+            emission_strength: 0.0,
+            light_blocking: 1,
         }
     }
 
@@ -92,6 +103,12 @@ impl Material {
         if let Some(tex) = &self.tex_bottom {
             self.tex_bottom_normal = Some(tex.clone() + "_normal");
         }
+        self
+    }
+
+    pub fn emission(mut self, color: [f32; 3], strength: f32) -> Self {
+        self.emission_color = color;
+        self.emission_strength = strength;
         self
     }
 }
@@ -158,6 +175,11 @@ impl VoxelRegistry {
                 tex_top_normal: lookup(tex_array, mat.tex_top_normal.as_ref()),
                 tex_side_normal: lookup(tex_array, mat.tex_side_normal.as_ref()),
                 tex_bottom_normal: lookup(tex_array, mat.tex_bottom_normal.as_ref()),
+                emission_color: mat.emission_color,
+                emission_strength: mat.emission_strength,
+                light_blocking: mat.light_blocking,
+                render_flags: 0,
+                padding: [0; 2],
             };
         }
 

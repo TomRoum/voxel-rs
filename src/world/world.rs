@@ -175,12 +175,29 @@ impl World {
         chunk::NO_BLOCK
     }
 
+    pub fn get_light(&self, x: i32, y: i32, z: i32) -> chunk::VoxelLight {
+        let pos = ChunkPos::from_block_pos(x, y, z);
+        self.chunks.get(&pos).map_or(chunk::VoxelLight::default(), |chunk| {
+            chunk.get_light((x & 31) as u32, (y & 31) as u32, (z & 31) as u32)
+        })
+    }
+
     /// Sets the block id at the given position in world space. Does nothing if the chunk was
     /// borrowed or does not exist. Returns true, if the block was set.
     pub fn set_block(&mut self, x: i32, y: i32, z: i32, block: chunk::BlockId) -> bool {
         let pos = ChunkPos::from_block_pos(x, y, z);
         if let Some(chunk) = self.chunks.get_mut(&pos) {
             chunk.set_block((x & 31) as u32, (y & 31) as u32, (z & 31) as u32, block);
+            self.mark_chunk_as_changed(&pos);
+            return true;
+        }
+        false
+    }
+
+    pub fn set_light(&mut self, x: i32, y: i32, z: i32, light: chunk::VoxelLight) -> bool {
+        let pos = ChunkPos::from_block_pos(x, y, z);
+        if let Some(chunk) = self.chunks.get_mut(&pos) {
+            chunk.set_light((x & 31) as u32, (y & 31) as u32, (z & 31) as u32, light);
             self.mark_chunk_as_changed(&pos);
             return true;
         }

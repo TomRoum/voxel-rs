@@ -20,6 +20,7 @@ uniform vec3 u_light_dir;// sun light direction
 uniform vec3 u_cam_pos;// world space position of the camera
 uniform bool u_render_shadows;// enables secondary ray casting
 uniform float u_shadow_distance;// distance until which shadows are rendered
+uniform int u_light_slot_side;
 
 // block highlighting
 uniform vec3 u_highlight_pos;// world space position of the block the player is highlighting
