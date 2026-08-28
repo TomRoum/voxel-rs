@@ -128,6 +128,10 @@ impl World {
         self.chunks.get(pos)
     }
 
+    pub fn has_chunk(&self, pos: &ChunkPos) -> bool {
+        self.chunks.contains_key(pos)
+    }
+
     /// Returns a mutable reference to the chunk at position, if it exists. This marks the position
     /// as changed, even if the chunk is not modified by the caller.
     pub fn get_chunk_mut(&mut self, pos: &ChunkPos) -> Option<&mut Chunk> {
@@ -202,6 +206,20 @@ impl World {
             return true;
         }
         false
+    }
+
+    pub fn clear_lights(&mut self) {
+        let positions = self.chunks.keys().copied().collect::<Vec<_>>();
+        for pos in positions {
+            if let Some(chunk) = self.chunks.get_mut(&pos) {
+                if chunk.light_data.iter().any(|light| *light != chunk::VoxelLight::default()) {
+                    chunk.light_data.fill(chunk::VoxelLight::default());
+                    chunk.light_revision = chunk.light_revision.wrapping_add(1);
+                    chunk.light_dirty_bounds = Some([0, 0, 0, chunk::CHUNK_SIZE - 1, chunk::CHUNK_SIZE - 1, chunk::CHUNK_SIZE - 1]);
+                    self.mark_chunk_as_changed(&pos);
+                }
+            }
+        }
     }
 
     /// Returns up to limit chunk positions of chunks that have been changed.

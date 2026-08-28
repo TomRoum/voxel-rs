@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::gamelogic::benchmark;
 use crate::world::chunk::{BlockId, ChunkPos, VoxelLight};
 use crate::world::hds::internal::{ChunkBuffer, ChunkBufferPool, pick_leaf_for_lod, RangeBuffer};
 use crate::world::hds::octree::{LeafId, OctantId, Octree, Position};
@@ -365,7 +366,7 @@ impl SerializedChunk {
         let mut buffer = alloc.allocate();
         let result = Self::serialize(storage, &mut buffer.data, lod);
         let buffer = if result.depth > 0 { Some(buffer) } else { None };
-        let light_data = chunk.light_data.clone();
+        let light_data = benchmark::trace("esvo_light_snapshot_copy", || chunk.light_data.clone());
         let light_revision = chunk.light_revision;
         Self { pos, pos_hash, lod, borrowed_chunk: Some(chunk), buffer, result, light_data, light_revision }
     }

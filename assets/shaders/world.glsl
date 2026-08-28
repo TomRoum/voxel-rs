@@ -84,9 +84,15 @@ vec4 trace_ray(vec3 ro, vec3 rd, out bool hit) {
         shadow = shadow_res.t < 0 ? 1.0 : 0.0;
     }
 
-    // combine light calculations and color
-    float light = clamp(u_ambient + (diffuse + specular) * shadow, 0.0, 1.0);
-    res.color.rgb *= light;
+    uint packed_light = voxel_light_at(res.pos, uint(u_light_slot_side));
+    float sky_light = float(packed_light & 0xfu) / 15.0;
+    float block_light = float((packed_light >> 4u) & 0xfu) / 15.0;
+
+    // Keep the existing sun term intact while voxel light supplies local illumination.
+    float sun_light = (diffuse + specular) * shadow;
+    float voxel_light = max(sky_light, block_light);
+    float light = clamp(u_ambient + sun_light + voxel_light, 0.0, 1.0);
+    res.color.rgb = res.color.rgb * light + mat.emission_color * mat.emission_strength * block_light;
     return res.color;
 }
 

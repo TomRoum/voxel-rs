@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::gamelogic::benchmark;
 use crate::world::chunk::{BlockId, ChunkPos, VoxelLight};
 use crate::world::hds::{ChunkBuffer, ChunkBufferPool, WorldSvo};
 use crate::world::hds::internal::{pick_leaf_for_lod, RangeBuffer};
@@ -423,7 +424,7 @@ impl SerializedChunk {
             buffer = Some(b);
         }
 
-        let light_data = chunk.light_data.clone();
+        let light_data = benchmark::trace("csvo_light_snapshot_copy", || chunk.light_data.clone());
         let light_revision = chunk.light_revision;
         Self {
             pos: chunk.pos,

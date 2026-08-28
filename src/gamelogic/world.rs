@@ -124,9 +124,10 @@ impl World {
     }
 
     pub fn set_block(&mut self, x: i32, y: i32, z: i32, block: u32) -> bool {
+        let old_block = self.world.get_block(x, y, z);
         let did_set = self.world.set_block(x, y, z, block);
-        if did_set && block == blocks::GLOWSTONE {
-            self.lighting.seed_block_light(&mut self.world, x, y, z, crate::world::chunk::VoxelLight::new(0, 15, 15, 15, 15));
+        if did_set {
+            self.lighting.block_changed(&mut self.world, x, y, z, old_block, block);
         }
         did_set
     }
@@ -183,6 +184,7 @@ impl World {
 
                 // set chunk to world but shortcut the change detection mechanism to avoid unnecessary iterations
                 self.world.set_chunk_unchanged(chunk);
+                self.lighting.chunk_loaded(&self.world, pos);
 
                 if cfg!(not(feature = "benchmark")) {
                     let chunk = self.world.borrow_chunk(&pos).unwrap();
@@ -196,6 +198,7 @@ impl World {
 
                 // set chunk to world but shortcut the change detection mechanism to avoid unnecessary iterations
                 self.world.set_chunk_unchanged(chunk);
+                self.lighting.chunk_loaded(&self.world, pos);
 
                 if cfg!(not(feature = "benchmark")) {
                     let chunk = self.world.borrow_chunk(&pos).unwrap();

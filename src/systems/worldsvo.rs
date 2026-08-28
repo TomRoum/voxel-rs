@@ -36,6 +36,8 @@ type BufferType = u8;
 #[cfg(feature = "use-csvo")]
 pub const SVO_TYPE: SvoType = SvoType::Csvo;
 
+pub const DEFAULT_MAX_CHUNKS_PER_UPDATE: u32 = 400;
+
 /// Svo takes ownership of a [`graphics::Svo`] and populates it with world [`world::chunk::Chunk`]s.
 /// Adding chunks will serialize them in the background and attach them the GPU SVO. Removing
 /// chunks will also remove them from the GPU.
@@ -60,6 +62,7 @@ pub struct Svo {
     light_revisions: FxHashMap<ChunkPos, u64>,
     free_light_slots: Vec<usize>,
     next_light_slot: usize,
+    max_chunks_per_update: u32,
     has_changed: bool,
     svo_coord_space: SvoCoordSpace,
 }
@@ -84,8 +87,9 @@ impl Svo {
             leaf_ids: FxHashMap::default(),
             light_slots: FxHashMap::default(),
             light_revisions: FxHashMap::default(),
-            free_light_slots: (0..1024).rev().collect(),
-            next_light_slot: 1024,
+            free_light_slots: Vec::new(),
+            next_light_slot: 0,
+            max_chunks_per_update: DEFAULT_MAX_CHUNKS_PER_UPDATE,
             has_changed: false,
             svo_coord_space: SvoCoordSpace {
                 center: ChunkPos::new(0, 0, 0),
@@ -122,6 +126,14 @@ impl Svo {
         }
     }
 
+    fn allocate_light_slot(&mut self) -> usize {
+        self.free_light_slots.pop().unwrap_or_else(|| {
+            let slot = self.next_light_slot;
+            self.next_light_slot += 1;
+            slot
+        })
+    }
+
     /// Returns if the SVO still has in-work chunks or if there are unconsumed chunks in the buffer.
     pub fn has_pending_jobs(&self) -> bool {
         self.processor.has_pending()
@@ -129,6 +141,11 @@ impl Svo {
 
     pub fn get_render_distance(&self) -> u32 {
         self.svo_coord_space.dst
+    }
+
+    pub fn set_max_chunks_per_update(&mut self, max_chunks: u32) {
+        assert!(max_chunks > 0);
+        self.max_chunks_per_update = max_chunks;
     }
 
     pub fn get_alloc_stats(&self) -> AllocStats {
@@ -151,7 +168,7 @@ impl Svo {
             self.on_coord_space_change();
         }
 
-        let results = self.processor.get_results(400);
+        let results = self.processor.get_results(self.max_chunks_per_update);
         let chunks = self.process_serialized_chunks(results);
 
         if !self.has_changed {
@@ -176,11 +193,11 @@ impl Svo {
         let mut slots = vec![u32::MAX; side * side * side];
         for (pos, slot) in &self.light_slots {
             if let Some(svo_pos) = self.svo_coord_space.cnv_chunk_pos(*pos) {
-                let index = svo_pos.0 as usize + side * (svo_pos.2 as usize + side * svo_pos.1 as usize);
+                let index = light_slot_index(svo_pos, side);
                 slots[index] = *slot as u32;
             }
         }
-        self.graphics_svo.update_light_slots(&slots);
+        self.graphics_svo.update_light_slots(&slots, side);
     }
 
     /// Iterates through all chunks and "shifts" them, if necessary, to their new position in SVO
@@ -229,14 +246,6 @@ impl Svo {
 
         for mut result in results {
             let chunk = result.value.take_borrowed_chunk().unwrap();
-            let slot = if let Some(slot) = self.light_slots.get(&result.pos) {
-                *slot
-            } else {
-                let slot = self.free_light_slots.pop().unwrap_or(self.light_slots.len());
-                self.light_slots.insert(result.pos, slot);
-                slot
-            };
-            light_updates.push((slot, chunk.light_data.clone()));
             chunks.push(chunk);
 
             let svo_pos = self.svo_coord_space.cnv_chunk_pos(result.pos);
@@ -249,17 +258,20 @@ impl Svo {
                 continue;
             }
 
-            if !self.light_slots.contains_key(&result.pos) {
-                let slot = self.free_light_slots.pop().unwrap_or_else(|| {
-                    let slot = self.next_light_slot;
-                    self.next_light_slot += 1;
-                    slot
-                });
+            let has_light = result.value.light_data().iter().any(|light| *light != VoxelLight::default());
+            if !has_light {
+                if let Some(slot) = self.light_slots.remove(&result.pos) {
+                    self.graphics_svo.clear_light_chunk(slot);
+                    self.free_light_slots.push(slot);
+                }
+                self.light_revisions.remove(&result.pos);
+            } else if !self.light_slots.contains_key(&result.pos) {
+                let slot = self.allocate_light_slot();
                 self.light_slots.insert(result.pos, slot);
             }
             if let Some(slot) = self.light_slots.get(&result.pos).copied() {
                 if self.light_revisions.get(&result.pos) != Some(&result.value.light_revision()) {
-                    self.graphics_svo.update_light_chunk(slot, result.value.light_data());
+                    light_updates.push((slot, result.value.light_data().to_vec()));
                     self.light_revisions.insert(result.pos, result.value.light_revision());
                 }
             }
@@ -283,15 +295,26 @@ impl Svo {
     }
 }
 
+fn light_slot_index(pos: hds::octree::Position, side: usize) -> usize {
+    pos.0 as usize + side * (pos.2 as usize + side * pos.1 as usize)
+}
+
 //noinspection DuplicatedCode
 #[cfg(test)]
 mod svo_tests {
     use rustc_hash::FxHashMap;
 
-    use crate::systems::worldsvo::{Svo, SvoCoordSpace};
+    use crate::systems::worldsvo::{light_slot_index, Svo, SvoCoordSpace};
     use crate::world::chunk::ChunkPos;
     use crate::world::hds::{esvo, WorldSvo};
     use crate::world::hds::octree::Position;
+
+    #[test]
+    fn light_slot_index_uses_exact_side_at_upper_boundary() {
+        let side = 61;
+        let max = side - 1;
+        assert_eq!(light_slot_index(Position(max as u32, max as u32, max as u32), side), side * side * side - 1);
+    }
 
     impl esvo::Serializable for u32 {
         fn unique_id(&self) -> u64 {

@@ -4,6 +4,7 @@ use std::ptr;
 
 use cgmath::{EuclideanSpace, Matrix4, Point3, SquareMatrix, Vector3};
 
+use crate::gamelogic::benchmark;
 use crate::graphics::buffer::{Buffer, MappedBuffer};
 use crate::graphics::fence::Fence;
 use crate::graphics::framebuffer::Framebuffer;
@@ -88,7 +89,10 @@ pub struct Stats {
     pub depth: u8,
 }
 
-const INITIAL_LIGHT_BUFFER_SLOTS: usize = 1024;
+// Payload storage is sparse: one slot is allocated only for a chunk with non-default light.
+// Capacity is therefore O(highest allocated payload slot * CHUNK_VOLUME), rather than one
+// payload for every chunk position in the render-distance cube.
+const INITIAL_LIGHT_BUFFER_SLOTS: usize = 1;
 
 pub struct RenderParams {
     /// `ambient_intensity` is the amount of ambient light present in the scene.
@@ -170,8 +174,9 @@ impl Svo {
 
     pub fn update_light_chunk(&mut self, slot: usize, lights: &[VoxelLight]) {
         assert_eq!(lights.len(), CHUNK_VOLUME);
+        // Wait once before either an in-place write or buffer replacement.
+        benchmark::trace("light_upload_fence_wait", || self.render_fence.borrow().wait());
         self.ensure_light_slot(slot);
-        self.render_fence.borrow().wait();
         let dst = self.light_buffer.as_slice_mut();
         let start = slot * CHUNK_VOLUME;
         dst[start..start + CHUNK_VOLUME].copy_from_slice(lights);
@@ -191,13 +196,14 @@ impl Svo {
             return;
         }
 
-        self.render_fence.borrow().wait();
         let new_slots = current_slots.max(1).max(slot + 1).next_power_of_two();
-        let old_buffer = std::mem::replace(
-            &mut self.light_buffer,
-            MappedBuffer::new(CHUNK_VOLUME * new_slots),
-        );
-        self.light_buffer.as_slice_mut()[..old_buffer.len()].copy_from_slice(old_buffer.as_slice());
+        benchmark::trace("light_buffer_growth", || {
+            let old_buffer = std::mem::replace(
+                &mut self.light_buffer,
+                MappedBuffer::new(CHUNK_VOLUME * new_slots),
+            );
+            self.light_buffer.as_slice_mut()[..old_buffer.len()].copy_from_slice(old_buffer.as_slice());
+        });
         self.light_buffer.bind_as_storage_buffer(buffer_indices::LIGHTS);
     }
 
@@ -216,8 +222,9 @@ impl Svo {
     pub fn update_light_chunks(&mut self, updates: &[(usize, &[VoxelLight])]) {
         if updates.is_empty() { return; }
         let required_slots = updates.iter().map(|(slot, _)| slot + 1).max().unwrap();
+        // Wait once before either an in-place write or buffer replacement.
+        benchmark::trace("light_upload_fence_wait", || self.render_fence.borrow().wait());
         self.ensure_light_capacity(required_slots);
-        self.render_fence.borrow().wait();
         let dst = self.light_buffer.as_slice_mut();
         for (slot, lights) in updates {
             assert_eq!(lights.len(), CHUNK_VOLUME);
@@ -230,21 +237,23 @@ impl Svo {
         let current_slots = self.light_buffer.len() / CHUNK_VOLUME;
         if required_slots <= current_slots { return; }
         let new_slots = required_slots.next_power_of_two();
-        self.render_fence.borrow().wait();
-        let old_buffer = std::mem::replace(&mut self.light_buffer, MappedBuffer::new(CHUNK_VOLUME * new_slots));
-        self.light_buffer.as_slice_mut()[..old_buffer.len()].copy_from_slice(old_buffer.as_slice());
+        benchmark::trace("light_buffer_growth", || {
+            let old_buffer = std::mem::replace(&mut self.light_buffer, MappedBuffer::new(CHUNK_VOLUME * new_slots));
+            self.light_buffer.as_slice_mut()[..old_buffer.len()].copy_from_slice(old_buffer.as_slice());
+        });
         self.light_buffer.bind_as_storage_buffer(buffer_indices::LIGHTS);
     }
 
-    pub fn update_light_slots(&mut self, slots: &[u32]) {
+    pub fn update_light_slots(&mut self, slots: &[u32], side: usize) {
         if slots.is_empty() { return; }
-        self.render_fence.borrow().wait();
+        assert_eq!(side.checked_mul(side).and_then(|area| area.checked_mul(side)), Some(slots.len()));
+        benchmark::trace("light_slot_table_fence_wait", || self.render_fence.borrow().wait());
         if self.light_slot_buffer.len() < slots.len() {
             self.light_slot_buffer = MappedBuffer::new(slots.len());
             self.light_slot_buffer.bind_as_storage_buffer(buffer_indices::LIGHT_SLOTS);
         }
         self.light_slot_buffer.as_slice_mut()[..slots.len()].copy_from_slice(slots);
-        self.light_slot_side = (slots.len() as f64).cbrt() as i32;
+        self.light_slot_side = side as i32;
     }
 
     /// Writes all changes from the given `svo` to the GPU buffer.
