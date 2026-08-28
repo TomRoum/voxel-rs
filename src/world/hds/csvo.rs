@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::world::chunk::{BlockId, ChunkPos};
+use crate::world::chunk::{BlockId, ChunkPos, VoxelLight};
 use crate::world::hds::{ChunkBuffer, ChunkBufferPool, WorldSvo};
 use crate::world::hds::internal::{pick_leaf_for_lod, RangeBuffer};
 use crate::world::hds::octree::{LeafId, OctantId, Octree, Position};
@@ -397,6 +397,8 @@ pub struct SerializedChunk {
     borrowed_chunk: Option<BorrowedChunk>,
     buffer: Option<Pooled<ChunkBuffer<u8, StatsAllocator>>>,
     materials: Option<Vec<BlockId>>,
+    light_data: Vec<VoxelLight>,
+    light_revision: u64,
 }
 
 impl SerializedChunk {
@@ -421,6 +423,8 @@ impl SerializedChunk {
             buffer = Some(b);
         }
 
+        let light_data = chunk.light_data.clone();
+        let light_revision = chunk.light_revision;
         Self {
             pos: chunk.pos,
             pos_hash,
@@ -428,6 +432,8 @@ impl SerializedChunk {
             borrowed_chunk: Some(chunk),
             buffer,
             materials,
+            light_data,
+            light_revision,
         }
     }
 
@@ -552,6 +558,9 @@ impl SerializedChunk {
     pub fn has_data(&self) -> bool {
         self.buffer.is_some() && self.materials.is_some()
     }
+
+    pub fn light_data(&self) -> &[VoxelLight] { &self.light_data }
+    pub fn light_revision(&self) -> u64 { self.light_revision }
 }
 
 #[cfg(test)]

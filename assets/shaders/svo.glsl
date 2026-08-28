@@ -56,11 +56,37 @@ struct Material {
     int tex_top_normal;
     int tex_side_normal;
     int tex_bottom_normal;
+
+    vec3 emission_color;
+    float emission_strength;
+    int light_blocking;
+    int render_flags;
 };
 
 layout (std430, binding = 2) readonly buffer MaterialRegistry {
     Material materials[];
 };
+
+layout (std430, binding = 4) readonly buffer LightPayloadRegistry {
+    uint voxel_lights[];
+};
+
+layout (std430, binding = 5) readonly buffer LightSlotRegistry {
+    uint light_slots[];
+};
+
+uint light_index(uint x, uint y, uint z) {
+    return x + 32u * (z + 32u * y);
+}
+
+uint voxel_light_at(vec3 position, uint side) {
+    ivec3 chunk = ivec3(floor(position / 32.0));
+    if (any(lessThan(chunk, ivec3(0))) || any(greaterThanEqual(chunk, ivec3(side)))) return 0u;
+    uint slot = light_slots[uint(chunk.x) + side * (uint(chunk.z) + side * uint(chunk.y))];
+    if (slot == 0xffffffffu) return 0u;
+    ivec3 local = ivec3(floor(position)) - chunk * 32;
+    return voxel_lights[slot * 32768u + light_index(uint(local.x), uint(local.y), uint(local.z))];
+}
 
 #define SVO_TYPE_ESVO 1
 #define SVO_TYPE_CSVO 2

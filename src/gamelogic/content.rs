@@ -16,6 +16,7 @@ pub mod blocks {
     pub const OAK_LEAVES: BlockId = 10;
     pub const OAK_PLANKS: BlockId = 11;
     pub const COBBLESTONE: BlockId = 12;
+    pub const GLOWSTONE: BlockId = 13;
 
     pub fn new_registry() -> VoxelRegistry {
         let mut registry = VoxelRegistry::new();
@@ -57,7 +58,8 @@ pub mod blocks {
             .add_material(OAK_LOG, Material::new().specular(70.0, 0.4).side("oak_log").top("oak_log_top").bottom("oak_log_top").with_normals())
             .add_material(OAK_LEAVES, Material::new().specular(70.0, 0.4).all_sides("oak_leaves"))
             .add_material(OAK_PLANKS, Material::new().specular(70.0, 0.4).all_sides("oak_planks").with_normals())
-            .add_material(COBBLESTONE, Material::new().specular(70.0, 0.4).all_sides("cobblestone").with_normals());
+            .add_material(COBBLESTONE, Material::new().specular(70.0, 0.4).all_sides("cobblestone").with_normals())
+            .add_material(GLOWSTONE, Material::new().all_sides("stone").emission([1.0, 0.8, 0.4], 1.0));
         registry
     }
 }

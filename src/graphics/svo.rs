@@ -13,6 +13,7 @@ use crate::graphics::shader::{ShaderError, ShaderProgram, ShaderProgramBuilder};
 use crate::graphics::svo_picker::{PickerBatch, PickerBatchResult, PickerResult, PickerTask};
 use crate::graphics::svo_registry::{MaterialInstance, VoxelRegistry};
 use crate::graphics::texture_array::{TextureArray, TextureArrayError};
+use crate::world::chunk::{VoxelLight, CHUNK_VOLUME};
 use crate::world::hds::WorldSvo;
 
 #[derive(Debug, Copy, Clone)]
@@ -43,10 +44,12 @@ impl Deref for SvoType {
 pub mod buffer_indices {
     pub const WORLD: u32 = 0;
     pub const MATERIALS: u32 = 2;
+    pub const LIGHTS: u32 = 4;
     pub const PICKER_OUT: u32 = 1;
     pub const PICKER_IN: u32 = 3;
     pub const DEBUG_IN: u32 = 11;
     pub const DEBUG_OUT: u32 = 12;
+    pub const LIGHT_SLOTS: u32 = 5;
 }
 
 /// Svo can be used to render an SVO of [`SerializedChunk`]. It is initialised
@@ -56,8 +59,11 @@ pub mod buffer_indices {
 pub struct Svo {
     tex_array: Resource<TextureArray, TextureArrayError>,
     material_buffer: Buffer<MaterialInstance>,
+    light_buffer: MappedBuffer<VoxelLight>,
     world_shader: Resource<ShaderProgram, ShaderError>,
     world_buffer: MappedBuffer<u8>,
+    light_slot_buffer: MappedBuffer<u32>,
+    light_slot_side: i32,
     // screen_quad is used to render a full-screen quad on which the per-pixel raytracer for the SVO
     // is executed
     screen_quad: ScreenQuad,
@@ -81,6 +87,8 @@ pub struct Stats {
     /// depth is the number of octant divisions the SVO has, until the leaf node is encoded.
     pub depth: u8,
 }
+
+const INITIAL_LIGHT_BUFFER_SLOTS: usize = 1024;
 
 pub struct RenderParams {
     /// `ambient_intensity` is the amount of ambient light present in the scene.
@@ -129,8 +137,11 @@ impl Svo {
         let instance = Self {
             tex_array,
             material_buffer,
+            light_buffer: MappedBuffer::new(CHUNK_VOLUME * INITIAL_LIGHT_BUFFER_SLOTS),
             world_shader,
             world_buffer: MappedBuffer::new(size_mb * 1000 * 1000),
+            light_slot_buffer: MappedBuffer::new(1),
+            light_slot_side: 1,
             screen_quad: ScreenQuad::new(),
             render_fence: RefCell::new(Fence::new()),
 
@@ -150,9 +161,44 @@ impl Svo {
 
     pub fn bind_buffers_globally(&self) {
         self.material_buffer.bind_as_storage_buffer(buffer_indices::MATERIALS);
+        self.light_buffer.bind_as_storage_buffer(buffer_indices::LIGHTS);
         self.world_buffer.bind_as_storage_buffer(buffer_indices::WORLD);
+        self.light_slot_buffer.bind_as_storage_buffer(buffer_indices::LIGHT_SLOTS);
         self.picker_in_buffer.bind_as_storage_buffer(buffer_indices::PICKER_IN);
         self.picker_out_buffer.bind_as_storage_buffer(buffer_indices::PICKER_OUT);
+    }
+
+    pub fn update_light_chunk(&mut self, slot: usize, lights: &[VoxelLight]) {
+        assert_eq!(lights.len(), CHUNK_VOLUME);
+        self.ensure_light_slot(slot);
+        self.render_fence.borrow().wait();
+        let dst = self.light_buffer.as_slice_mut();
+        let start = slot * CHUNK_VOLUME;
+        dst[start..start + CHUNK_VOLUME].copy_from_slice(lights);
+    }
+
+    pub fn clear_light_chunk(&mut self, slot: usize) {
+        assert!(slot < self.light_buffer.len() / CHUNK_VOLUME);
+        self.render_fence.borrow().wait();
+        let dst = self.light_buffer.as_slice_mut();
+        let start = slot * CHUNK_VOLUME;
+        dst[start..start + CHUNK_VOLUME].fill(VoxelLight::default());
+    }
+
+    fn ensure_light_slot(&mut self, slot: usize) {
+        let current_slots = self.light_buffer.len() / CHUNK_VOLUME;
+        if slot < current_slots {
+            return;
+        }
+
+        self.render_fence.borrow().wait();
+        let new_slots = current_slots.max(1).max(slot + 1).next_power_of_two();
+        let old_buffer = std::mem::replace(
+            &mut self.light_buffer,
+            MappedBuffer::new(CHUNK_VOLUME * new_slots),
+        );
+        self.light_buffer.as_slice_mut()[..old_buffer.len()].copy_from_slice(old_buffer.as_slice());
+        self.light_buffer.bind_as_storage_buffer(buffer_indices::LIGHTS);
     }
 
     pub fn reload_resources(&mut self) {
@@ -165,6 +211,40 @@ impl Svo {
         if let Err(e) = self.picker_shader.reload() {
             println!("error reloading picker shader: {e:?}");
         }
+    }
+
+    pub fn update_light_chunks(&mut self, updates: &[(usize, &[VoxelLight])]) {
+        if updates.is_empty() { return; }
+        let required_slots = updates.iter().map(|(slot, _)| slot + 1).max().unwrap();
+        self.ensure_light_capacity(required_slots);
+        self.render_fence.borrow().wait();
+        let dst = self.light_buffer.as_slice_mut();
+        for (slot, lights) in updates {
+            assert_eq!(lights.len(), CHUNK_VOLUME);
+            let start = slot * CHUNK_VOLUME;
+            dst[start..start + CHUNK_VOLUME].copy_from_slice(lights);
+        }
+    }
+
+    fn ensure_light_capacity(&mut self, required_slots: usize) {
+        let current_slots = self.light_buffer.len() / CHUNK_VOLUME;
+        if required_slots <= current_slots { return; }
+        let new_slots = required_slots.next_power_of_two();
+        self.render_fence.borrow().wait();
+        let old_buffer = std::mem::replace(&mut self.light_buffer, MappedBuffer::new(CHUNK_VOLUME * new_slots));
+        self.light_buffer.as_slice_mut()[..old_buffer.len()].copy_from_slice(old_buffer.as_slice());
+        self.light_buffer.bind_as_storage_buffer(buffer_indices::LIGHTS);
+    }
+
+    pub fn update_light_slots(&mut self, slots: &[u32]) {
+        if slots.is_empty() { return; }
+        self.render_fence.borrow().wait();
+        if self.light_slot_buffer.len() < slots.len() {
+            self.light_slot_buffer = MappedBuffer::new(slots.len());
+            self.light_slot_buffer.bind_as_storage_buffer(buffer_indices::LIGHT_SLOTS);
+        }
+        self.light_slot_buffer.as_slice_mut()[..slots.len()].copy_from_slice(slots);
+        self.light_slot_side = (slots.len() as f64).cbrt() as i32;
     }
 
     /// Writes all changes from the given `svo` to the GPU buffer.
@@ -207,6 +287,7 @@ impl Svo {
         self.world_shader.set_texture("u_texture", 0, &self.tex_array);
         self.world_shader.set_i32("u_render_shadows", params.render_shadows as i32);
         self.world_shader.set_f32("u_shadow_distance", params.shadow_distance);
+        self.world_shader.set_i32("u_light_slot_side", self.light_slot_side);
 
         let mut selected_block = Vector3::new(f32::NAN, f32::NAN, f32::NAN);
         if let Some(pos) = params.selected_voxel {

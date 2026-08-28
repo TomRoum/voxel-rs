@@ -155,6 +155,7 @@ mod tests {
                 tex_top_normal: -1,
                 tex_side_normal: -1,
                 tex_bottom_normal: -1,
+                ..Default::default()
             },
             MaterialInstance { // full
                 specular_pow: 0.0,
@@ -165,6 +166,7 @@ mod tests {
                 tex_top_normal: -1,
                 tex_side_normal: -1,
                 tex_bottom_normal: -1,
+                ..Default::default()
             },
             MaterialInstance { // coords
                 specular_pow: 0.0,
@@ -175,6 +177,7 @@ mod tests {
                 tex_top_normal: -1,
                 tex_side_normal: -1,
                 tex_bottom_normal: -1,
+                ..Default::default()
             },
             MaterialInstance { // transparent_1
                 specular_pow: 0.0,
@@ -185,6 +188,7 @@ mod tests {
                 tex_top_normal: -1,
                 tex_side_normal: -1,
                 tex_bottom_normal: -1,
+                ..Default::default()
             },
             MaterialInstance { // transparent_2
                 specular_pow: 0.0,
@@ -195,6 +199,7 @@ mod tests {
                 tex_top_normal: -1,
                 tex_side_normal: -1,
                 tex_bottom_normal: -1,
+                ..Default::default()
             },
         ], buffer::STATIC_READ);
 
